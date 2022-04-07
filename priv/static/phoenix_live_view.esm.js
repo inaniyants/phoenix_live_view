@@ -305,9 +305,6 @@ var DOM = {
   isPhxUpdate(el, phxUpdate, updateTypes) {
     return el.getAttribute && updateTypes.indexOf(el.getAttribute(phxUpdate)) >= 0;
   },
-  findPhxSticky(el) {
-    return this.all(el, `[${PHX_STICKY}]`);
-  },
   findPhxChildren(el, parentId) {
     return this.all(el, `${PHX_VIEW_SELECTOR}[${PHX_PARENT_ID}="${parentId}"]`);
   },
@@ -2205,6 +2202,9 @@ var View = class {
   isMain() {
     return this.el.getAttribute(PHX_MAIN) !== null;
   }
+  isSticky() {
+    return dom_default.isPhxSticky(this.el);
+  }
   connectParams() {
     let params = this.liveSocket.params(this.el);
     let manifest = dom_default.all(document, `[${this.binding(PHX_TRACK_STATIC)}]`).map((node) => node.src || node.href).filter((url) => typeof url === "string");
@@ -3073,7 +3073,6 @@ var View = class {
           if (this.liveSocket.commitPendingLink(linkRef)) {
             this.href = href;
           }
-          this.applyPendingUpdates();
           callback && callback(linkRef);
         }
       });
@@ -3385,7 +3384,7 @@ var LiveSocket = class {
     this.main.join((joinCount, onDone) => {
       if (joinCount === 1 && this.commitPendingLink(linkRef)) {
         this.requestDOMUpdate(() => {
-          dom_default.findPhxSticky(document).forEach((el) => newMainEl.appendChild(el));
+          Object.entries(this.roots).forEach(([id, view]) => view.isSticky() && newMainEl.appendChild(view.el));
           this.outgoingMainEl.replaceWith(newMainEl);
           this.outgoingMainEl = null;
           callback && callback();
@@ -3426,6 +3425,11 @@ var LiveSocket = class {
   }
   getRootById(id) {
     return this.roots[id];
+  }
+  applyViewsPendingUpdates() {
+    Object.entries(this.roots).forEach(([id, view]) => {
+      view.applyPendingUpdates();
+    });
   }
   destroyAllViews() {
     for (let id in this.roots) {
@@ -3663,12 +3667,15 @@ var LiveSocket = class {
       let href = window.location.href;
       this.requestDOMUpdate(() => {
         if (this.main.isConnected() && (type === "patch" && id === this.main.id)) {
-          this.main.pushLinkPatch(href, null);
+          this.main.pushLinkPatch(href, null, () => {
+            this.applyViewsPendingUpdates();
+          });
         } else {
           this.replaceMain(href, null, () => {
             if (root) {
               this.replaceRootHistory();
             }
+            this.applyViewsPendingUpdates();
             if (typeof scroll === "number") {
               setTimeout(() => {
                 window.scrollTo(0, scroll);
@@ -3718,6 +3725,7 @@ var LiveSocket = class {
     this.withPageLoading({ to: href, kind: "patch" }, (done) => {
       this.main.pushLinkPatch(href, targetEl, (linkRef) => {
         this.historyPatch(href, linkState, linkRef);
+        this.applyViewsPendingUpdates();
         done();
       });
     });
@@ -3735,6 +3743,7 @@ var LiveSocket = class {
       this.replaceMain(href, flash, () => {
         browser_default.pushState(linkState, { type: "redirect", id: this.main.id, scroll }, href);
         this.registerNewLocation(window.location);
+        this.applyViewsPendingUpdates();
         done();
       });
     });
